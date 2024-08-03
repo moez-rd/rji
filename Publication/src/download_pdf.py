@@ -1,81 +1,113 @@
-import json
 import os
-import csv
 import requests
-from bs4 import BeautifulSoup
-import re
+from definitions import ROOT_DIR
+from termcolor import colored
+import pandas as pd
+import concurrent.futures
+import datetime
 
-def sanitize_filename(filename):
-    # Replace any invalid characters with an underscore
-    return re.sub(r'[<>:"/\\|?*]', '_', filename)
 
-def download_pdf_from_relation(url, download_folder, file_name):
+config = {
+    "max_workers": 100,
+    "input_dataset": f"{ROOT_DIR}/data/checked_relation_links.csv",
+    "output_folder": f"{ROOT_DIR}/data/pdf",
+    "output_dataset": f"{ROOT_DIR}/data/downloaded_pdf_stasues.csv"
+}
+
+def print_results(results, index) -> None:
+    print(
+        f"{colored(f" {results["timestamp"]} ", "black", "on_yellow", attrs=["bold"])} "
+        f"{colored(f" {index + 1}/{results["df_len"]} ", "black", "on_dark_grey", attrs=["bold"])} "
+        f"{colored("jid:", "blue")} {results["jid"]}, \t"
+        f"{colored("article_id:", "blue")} {results["article_id"]}, \t"
+        f"{colored("time taken", "blue")}: {round(results["time_delta"], 6)}s \t"
+        f"{colored("average", "blue")}: {results["average"]}s"
+    )
+
+def download_pdf(url, jid, eissn, article_id, df_len, times):
+    now = datetime.datetime.now()
+    timestamp = now.strftime("%d-%m-%Y %H%M%S")
+    status = None
+
     try:
         response = requests.get(url)
+
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Find the PDF download link within the HTML content
-            download_link = soup.find('a', {'class': 'download'})  # Adjust this to match the actual HTML structure
-            
-            if download_link and 'href' in download_link.attrs: # type: ignore
-                pdf_url = download_link['href'] # type: ignore
-                if not pdf_url.startswith('http'): # type: ignore
-                    pdf_url = os.path.join(os.path.dirname(url), pdf_url)  # type: ignore # Handle relative links
-                
-                pdf_response = requests.get(url.replace("view", "download")) # type: ignore
-                if pdf_response.status_code == 200:
-                    sanitized_file_name = sanitize_filename(file_name)
-                    pdf_path = os.path.join(download_folder, sanitized_file_name)
-                    with open(pdf_path, 'wb') as pdf_file:
-                        pdf_file.write(pdf_response.content)
-                    return True
-                else:
-                    print(f"Failed to download PDF from {pdf_url}")
-            else:
-                print(f"No PDF link found in {url}")
+            output_path = os.path.join(config["output_folder"], f"{jid}_{str(article_id).split("/")[-1]}.pdf")
+            with open(output_path, 'wb') as file:
+                file.write(response.content)
+
+            status = "Downloaded"
         else:
-            print(f"Failed to access {url}")
-        return False
+            print(colored(f"Failed download, staus code: {response.status_code}", "red"))
+            status = f"Failed: {response.status_code}"
     except Exception as e:
-        print(f"An error occurred: {e}")
-        return False
+        print(colored(f"Error: {e.__class__.__name__}, {e}", "red"))
+        status = f"Error: {e.__class__.__name__}"
 
-# Folder containing JSON files
-folder_path = 'journals_v4'  # Change this to your folder path
-output_folder = 'pdf'  # Folder to save downloaded PDFs
+    time_delta = datetime.datetime.now() - now
+    time_delta = time_delta.seconds + (time_delta.microseconds / 1000000)
+    
+    times.append(time_delta)
+    average = round(sum(times) / len(times), 6)
 
-# Collect all JSON files in the folder
-json_files = [pos_json for pos_json in os.listdir(folder_path) if pos_json.endswith('.json')]
+    print_data = {
+        "time_delta": time_delta,
+        "timestamp": timestamp,
+        "df_len": df_len,
+        "jid": jid,
+        "article_id": str(article_id).split("/")[-1],
+        "average": average,
+    }
 
-# Prepare CSV to log articles without a download link
-csv_file_path = 'missing_relations_pdf.csv'
-csv_header = ['jid', 'status']
+    return print_data, jid, eissn, article_id, status
 
-with open(csv_file_path, 'w', newline='') as csvfile:
-    csv_writer = csv.writer(csvfile)
-    csv_writer.writerow(csv_header)
+def run():
+    print(colored(" RJI PUBLICATION: DOWNLOAD PDF ", "black", "on_dark_grey", attrs=["bold"]))
 
-    # Process each JSON file in the folder
-    for json_file in json_files:
-        with open(os.path.join(folder_path, json_file), 'r') as file:
+    if not os.path.exists(config["output_folder"]):
+        os.makedirs(config["output_folder"])
+
+    df = pd.read_csv(config["input_dataset"])
+
+    result_df = pd.DataFrame(columns=["jid", "eissn", "article_id", "status"])
+
+    times = []
+
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config["max_workers"]) as executor:
+        futures = []
+
+        for i in range(len(df)):
+            if df["has_view"]:
+                futures.append(executor.submit(
+                    download_pdf,
+                    df["pdf_download_url"].to_list()[i],
+                    df["jid"].to_list()[i],
+                    df["eissn"].to_list()[i],
+                    df["article_id"].to_list()[i],
+                    len(df),
+                    times
+                ))
+
+        index = 0 
+            
+        for future in concurrent.futures.as_completed(futures):
             try:
-                journal_data = json.load(file)
-                jid = journal_data['jid']
+                result = future.result()
+                
+                result_df.loc[len(result_df)] = [
+                    result[1],
+                    result[2],
+                    result[3],
+                    result[4],
+                ]
 
-                for article in journal_data['articles']:
-                    title = article['title'] if isinstance(article['title'], str) else 'No Title'
-                    if 'relation' in article:
-                        relation_url = article['relation']
-                        pdf_name = f"{title.replace(' ', '_')}.pdf"
-                        if download_pdf_from_relation(relation_url, output_folder, pdf_name):
-                            print(f"Downloaded {relation_url} successfully.")
-                        else:
-                            csv_writer.writerow([jid, 'Download failed'])
-                    else:
-                        csv_writer.writerow([jid, 'No relation link'])
+                print_results(result[0], index)
 
-            except json.JSONDecodeError:
-                print(f"Error reading JSON file: {json_file}")
+            except Exception as e:
+                print(colored(f"Thread Error: {e.__class__.__name__}, {e}", "red"))
 
-print("Process completed. Check 'missing_relations.csv' for articles without downloadable PDF links.")
+            index += 1
+
+    result_df.to_csv(config["output_dataset"], index=False)
