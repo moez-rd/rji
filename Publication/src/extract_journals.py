@@ -143,6 +143,8 @@ def extract_journal(xml_directories, jid, eissn, df_len, index) -> None:
 
 
 def run() -> None:
+    print(colored(" RJI PUBLICATION: EXTRACT_JOURNALS ", "black", "on_dark_grey", attrs=["bold"]))
+
     # =================================================================
     # Create new result directory if not exist
     if not os.path.exists(config["output_directory"]): 

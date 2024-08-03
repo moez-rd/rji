@@ -109,6 +109,7 @@ def scrape_xml(index, output_directory, oai, jid, df_len, times) -> None:
 
 
 def run() -> None:
+    print(colored(" RJI PUBLICATION: SCRAPE XML ", "black", "on_dark_grey", attrs=["bold"]))
     
     if not os.path.exists(config["output_directory"]): 
         os.makedirs(config["output_directory"])

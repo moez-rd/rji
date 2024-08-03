@@ -39,6 +39,8 @@ def check_oai_link(index, oai)-> tuple[int, int, str, str]:
 
 
 def run()-> None:
+    print(colored(" RJI PUBLICATION: CHECK OAI LINKS ", "black", "on_dark_grey", attrs=["bold"]))
+
     print("IMPORTING DATASET")
     df = pd.read_excel(config["input_dataset"])
     df.replace("-", None, inplace=True)
